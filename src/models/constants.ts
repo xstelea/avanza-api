@@ -23,7 +23,7 @@ export enum Paths {
   TRANSACTIONS_PATH = "/_mobile/account/transactions/{0}"
 }
 
-export enum Search {
+export enum InstrumentType {
   STOCK = "stock",
   FUND = "fund",
   BOND = "bond",
@@ -39,14 +39,14 @@ export enum Search {
   CONVERTIBLE = "convertible"
 }
 
-export enum Chartdata {
-  TODAY = "TODAY",
-  ONE_MONTH = "ONE_MONTH",
-  THREE_MONTHS = "THREE_MONTHS",
-  ONE_WEEK = "ONE_WEEK",
-  THIS_YEAR = "THIS_YEAR",
-  ONE_YEAR = "ONE_YEAR",
-  FIVE_YEARS = "FIVE_YEARS"
+export enum ChartDataPeriod {
+  TODAY = "today",
+  ONE_MONTH = "one_month",
+  THREE_MONTHS = "three_months",
+  ONE_WEEK = "one_week",
+  THIS_YEAR = "this_year",
+  ONE_YEAR = "one_year",
+  FIVE_YEARS = "five_years"
 }
 
 export enum Marketing {

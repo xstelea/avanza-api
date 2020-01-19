@@ -4,6 +4,7 @@
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "repository": "https://github.com/xstelea/avanza-api.git",
   "scripts": {
     "start": "node dist/index.js",
     "start:dev": "tsc-watch --onSuccess \"node ./dist/index.js\" --onFailure \"echo Beep! Compilation Failed\" --compiler typescript/bin/tsc",
@@ -19,12 +20,13 @@
     "@types/node": "^12.12.17",
     "@types/node-fetch": "^2.5.4",
     "@types/pino": "^5.15.1",
+    "@types/qs": "^6.9.0",
     "@types/ws": "^6.0.4",
-    "crypto": "^1.0.1",
     "express": "^4.17.1",
     "lodash": "^4.17.15",
     "node-fetch": "^2.6.0",
     "pino": "^5.15.0",
+    "qs": "^6.9.1",
     "rxjs": "^6.5.3",
     "totp-generator": "^0.0.7",
     "ws": "^7.2.1"

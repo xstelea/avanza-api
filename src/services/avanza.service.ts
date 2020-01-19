@@ -1,5 +1,11 @@
 const totp = require("totp-generator");
-import { Paths, Channels } from "../models";
+import {
+  Paths,
+  Channels,
+  Transactions,
+  InstrumentType,
+  ChartDataPeriod
+} from "../models";
 import fetch, { Headers } from "node-fetch";
 import {
   Subject,
@@ -31,11 +37,12 @@ import {
 } from "rxjs/operators";
 import WebSocket, { OpenEvent } from "ws";
 import Pino from "pino";
+import { stringify } from "qs";
 
 export const genericRetryStrategy = ({
   maxRetryAttempts = 3,
   scalingDuration = 1000,
-  excludedStatusCodes = [401]
+  excludedStatusCodes = [401, 400]
 }: {
   maxRetryAttempts?: number;
   scalingDuration?: number;
@@ -63,7 +70,7 @@ export const genericRetryStrategy = ({
       // retry after 1s, 2s, etc...
       return timer(retryAttempt * scalingDuration);
     }),
-    finalize(() => console.log("We are done!"))
+    finalize(() => console.log("Done retrying"))
   );
 };
 
@@ -262,7 +269,7 @@ export class Avanza {
           genericRetryStrategy({ maxRetryAttempts: 10, scalingDuration: 10000 })
         ),
         tap(values => {
-          this.logger.info(values, "auth session");
+          // this.logger.info(values, "auth session");
           this.authSession$.next(values);
         })
       )
@@ -412,37 +419,40 @@ export class Avanza {
   }
 
   call(method: string, path: string) {
-    return new Promise((resolve, reject) => {
-      combineLatest(
-        of({
-          method,
-          path
-        }),
-        this.authSession$
+    return combineLatest(
+      of({
+        method,
+        path
+      }),
+      this.authSession$
+    )
+      .pipe(
+        filter(([_, auth]) => !!auth),
+        switchMap(([{ method, path }, authSession]) =>
+          from(
+            request(path, {
+              method,
+              headers: {
+                "X-AuthenticationSession":
+                  authSession.auth.authenticationSession,
+                "X-SecurityToken": authSession.securityToken
+              }
+            })
+          ).pipe(
+            tap(response => {
+              if (response.json.statusCode !== 200) {
+                throw response.json;
+              }
+            }),
+            map(response => response.json)
+          )
+        ),
+        retryWhen(
+          genericRetryStrategy({ maxRetryAttempts: 10, scalingDuration: 10000 })
+        ),
+        first()
       )
-        .pipe(
-          filter(([_, auth]) => !!auth),
-          first(),
-          switchMap(([{ method, path }, authSession]) =>
-            from(
-              request(path, {
-                method,
-                headers: {
-                  "X-AuthenticationSession":
-                    authSession.auth.authenticationSession,
-                  "X-SecurityToken": authSession.securityToken
-                }
-              })
-            ).pipe(map(response => response.json))
-          ),
-          tap(response => resolve(response)),
-          catchError(err => {
-            reject(err);
-            return [];
-          })
-        )
-        .subscribe();
-    });
+      .toPromise();
   }
 
   getInspirationLists = async () =>
@@ -465,5 +475,57 @@ export class Avanza {
 
   getDealsAndOrders() {
     return this.call("GET", Paths.DEALS_AND_ORDERS_PATH);
+  }
+
+  getTransactions(
+    accountOrTransactionType: Transactions | string,
+    options: Partial<{
+      orderbookId: string[];
+      from: string;
+      to: string;
+      maxAmount: number;
+      minAmount: string;
+    }>
+  ) {
+    const path = Paths.TRANSACTIONS_PATH.replace(
+      "{0}",
+      accountOrTransactionType
+    );
+
+    const query = stringify({
+      ...options,
+      orderbookId: (options.orderbookId ?? []).join(",")
+    });
+    return this.call("GET", query ? `${path}?${query}` : path);
+  }
+
+  getInstrument(instrumentType: InstrumentType, instrumentId: string) {
+    const path = Paths.INSTRUMENT_PATH.replace(
+      "{0}",
+      instrumentType.toLowerCase()
+    ).replace("{1}", instrumentId);
+    return this.call("GET", path);
+  }
+
+  getOrderbook(orderbookId: string, instrumentType: InstrumentType) {
+    const path = Paths.ORDERBOOK_PATH.replace(
+      "{0}",
+      instrumentType.toLowerCase()
+    );
+    const query = stringify({ orderbookId });
+    return this.call("GET", `${path}?${query}`);
+  }
+
+  getOrderbooks(orderbookIds: string[]) {
+    const ids = orderbookIds.join(",");
+    const path = Paths.ORDERBOOK_LIST_PATH.replace("{0}", ids);
+    const query = stringify({ sort: "name" });
+    return this.call("GET", `${path}?${query}`);
+  }
+
+  getChartdata(orderbookId: string, chartDataPeriod: ChartDataPeriod) {
+    const path = Paths.CHARTDATA_PATH.replace("{0}", orderbookId);
+    const query = stringify({ timePeriod: chartDataPeriod });
+    return this.call("GET", `${path}?${query}`);
   }
 }
