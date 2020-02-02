@@ -17,7 +17,8 @@ import {
   of,
   timer,
   throwError,
-  Observable
+  Observable,
+  ReplaySubject
 } from "rxjs";
 import {
   delay,
@@ -113,6 +114,11 @@ interface MetaConnectResponse {
   successful: boolean;
 }
 
+interface SessionAuth {
+  securityToken: string;
+  authenticationSession: string;
+}
+
 export type MetaResponse = MetaHandshakeResponse | MetaConnectResponse;
 
 const MIN_INACTIVE_MINUTES = 30;
@@ -177,7 +183,19 @@ export class Avanza {
   );
   messages$ = new Subject();
 
-  private credentials$ = new BehaviorSubject<Credentials>(null);
+  private authenticationTimeout$ = new BehaviorSubject<number>(
+    MAX_INACTIVE_MINUTES
+  );
+  private onSetCredentials$ = new ReplaySubject<Credentials>();
+  private credentials$ = combineLatest(
+    this.onSetCredentials$,
+    this.authenticationTimeout$
+  ).pipe(
+    tap(([credentials, authenticationTimeout]) =>
+      checkCredentials(credentials, authenticationTimeout)
+    ),
+    map(([credentials]) => credentials)
+  );
   private authenticate$ = new BehaviorSubject<void>(null);
   private totpCode$ = this.credentials$.pipe(
     map(credentials => (credentials ? totp(credentials.totpSecret) : null))
@@ -203,16 +221,12 @@ export class Avanza {
   );
   private logger: Pino.BaseLogger;
 
-  constructor(
-    readonly credentials: Credentials,
-    private readonly _authenticationTimeout = MAX_INACTIVE_MINUTES,
-    readonly logLevel = "30"
-  ) {
-    this.logger = Pino({ name: "avanza service" });
-    checkCredentials(credentials, _authenticationTimeout);
-    this.credentials$.next(credentials);
+  setCredentials(credentials: Credentials) {
+    this.onSetCredentials$.next(credentials);
+  }
 
-    this.authenticate$
+  async authenticate() {
+    return this.authenticate$
       .pipe(
         withLatestFrom(this.credentials$),
         filter(([_, credentials]) => !!credentials),
@@ -232,6 +246,7 @@ export class Avanza {
                 throw response.json;
               }
             }),
+
             map(response => ({ ...credentials, ...response }))
           )
         ),
@@ -268,12 +283,27 @@ export class Avanza {
         retryWhen(
           genericRetryStrategy({ maxRetryAttempts: 10, scalingDuration: 10000 })
         ),
-        tap(values => {
-          // this.logger.info(values, "auth session");
-          this.authSession$.next(values);
-        })
+        map(authSession => ({
+          securityToken: authSession.securityToken,
+          authenticationSession: authSession.auth.authenticationSession
+        })),
+        first()
       )
-      .subscribe();
+      .toPromise();
+  }
+
+  constructor(
+    credentials?: Credentials,
+    private readonly _authenticationTimeout = MAX_INACTIVE_MINUTES,
+    readonly logLevel = "30"
+  ) {
+    this.logger = Pino({ name: "avanza service" });
+
+    if (credentials) {
+      this.setCredentials(credentials);
+    }
+
+    merge(this.credentials$).subscribe();
 
     this.authSession$
       .pipe(
@@ -414,67 +444,40 @@ export class Avanza {
         })
       )
       .subscribe();
-
-    this.authenticate$.next();
   }
 
-  call(method: string, path: string) {
-    return combineLatest(
-      of({
-        method,
-        path
-      }),
-      this.authSession$
-    )
-      .pipe(
-        filter(([_, auth]) => !!auth),
-        switchMap(([{ method, path }, authSession]) =>
-          from(
-            request(path, {
-              method,
-              headers: {
-                "X-AuthenticationSession":
-                  authSession.auth.authenticationSession,
-                "X-SecurityToken": authSession.securityToken
-              }
-            })
-          ).pipe(
-            tap(response => {
-              if (response.json.statusCode !== 200) {
-                throw response.json;
-              }
-            }),
-            map(response => response.json)
-          )
-        ),
-        retryWhen(
-          genericRetryStrategy({ maxRetryAttempts: 10, scalingDuration: 10000 })
-        ),
-        first()
-      )
-      .toPromise();
+  call(method: string, path: string, sessionAuth: SessionAuth) {
+    return request(path, {
+      method,
+      headers: {
+        "X-AuthenticationSession": sessionAuth.authenticationSession,
+        "X-SecurityToken": sessionAuth.securityToken
+      }
+    });
   }
 
-  getInspirationLists = async () =>
-    this.call("get", Paths.INSPIRATION_LIST_PATH.replace("{0}", ""));
+  getInspirationLists = async (auth: SessionAuth) =>
+    this.call("get", Paths.INSPIRATION_LIST_PATH.replace("{0}", ""), auth);
 
   /**
    * Get all `positions` held by this user.
    */
-  getPositions = async () => this.call("get", Paths.POSITIONS_PATH);
+  getPositions = async (auth: SessionAuth) =>
+    this.call("get", Paths.POSITIONS_PATH, auth);
 
   /**
    * Get an overview of the users holdings at Avanza Bank.
    */
-  getOverview = async () => this.call("get", Paths.OVERVIEW_PATH);
+  getOverview = async (auth: SessionAuth) =>
+    this.call("get", Paths.OVERVIEW_PATH, auth);
 
-  getAccountOverview(accountId: string) {
+  getAccountOverview(accountId: string, auth: SessionAuth) {
     const path = Paths.ACCOUNT_OVERVIEW_PATH.replace("{0}", accountId);
-    return this.call("GET", path);
+    return this.call("GET", path, auth);
   }
 
-  getDealsAndOrders() {
-    return this.call("GET", Paths.DEALS_AND_ORDERS_PATH);
+  getDealsAndOrders(auth: SessionAuth) {
+    return this.call("GET", Paths.DEALS_AND_ORDERS_PATH, auth);
   }
 
   getTransactions(
@@ -485,7 +488,8 @@ export class Avanza {
       to: string;
       maxAmount: number;
       minAmount: string;
-    }>
+    }>,
+    auth: SessionAuth
   ) {
     const path = Paths.TRANSACTIONS_PATH.replace(
       "{0}",
@@ -496,36 +500,48 @@ export class Avanza {
       ...options,
       orderbookId: (options.orderbookId ?? []).join(",")
     });
-    return this.call("GET", query ? `${path}?${query}` : path);
+    return this.call("GET", query ? `${path}?${query}` : path, auth);
   }
 
-  getInstrument(instrumentType: InstrumentType, instrumentId: string) {
+  getInstrument(
+    instrumentType: InstrumentType,
+    instrumentId: string,
+    auth: SessionAuth
+  ) {
     const path = Paths.INSTRUMENT_PATH.replace(
       "{0}",
       instrumentType.toLowerCase()
     ).replace("{1}", instrumentId);
-    return this.call("GET", path);
+    return this.call("GET", path, auth);
   }
 
-  getOrderbook(orderbookId: string, instrumentType: InstrumentType) {
+  getOrderbook(
+    orderbookId: string,
+    instrumentType: InstrumentType,
+    auth: SessionAuth
+  ) {
     const path = Paths.ORDERBOOK_PATH.replace(
       "{0}",
       instrumentType.toLowerCase()
     );
     const query = stringify({ orderbookId });
-    return this.call("GET", `${path}?${query}`);
+    return this.call("GET", `${path}?${query}`, auth);
   }
 
-  getOrderbooks(orderbookIds: string[]) {
+  getOrderbooks(orderbookIds: string[], auth: SessionAuth) {
     const ids = orderbookIds.join(",");
     const path = Paths.ORDERBOOK_LIST_PATH.replace("{0}", ids);
     const query = stringify({ sort: "name" });
-    return this.call("GET", `${path}?${query}`);
+    return this.call("GET", `${path}?${query}`, auth);
   }
 
-  getChartdata(orderbookId: string, chartDataPeriod: ChartDataPeriod) {
+  getChartdata(
+    orderbookId: string,
+    chartDataPeriod: ChartDataPeriod,
+    auth: SessionAuth
+  ) {
     const path = Paths.CHARTDATA_PATH.replace("{0}", orderbookId);
     const query = stringify({ timePeriod: chartDataPeriod });
-    return this.call("GET", `${path}?${query}`);
+    return this.call("GET", `${path}?${query}`, auth);
   }
 }
