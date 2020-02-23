@@ -146,6 +146,9 @@ const checkCredentials = (
 };
 
 export class Avanza {
+  static generateTwoFactorAuthCode(secret: number): number {
+    return totp(secret);
+  }
   private authenticationTimeout$ = new BehaviorSubject<number>(
     MAX_INACTIVE_MINUTES
   );
