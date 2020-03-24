@@ -81,3 +81,16 @@ export enum OrderType {
   BUY = "BUY",
   SELL = "SELL"
 }
+
+export enum ChartResolution {
+  Quarter = "QUARTER",
+  Month = "MONTH",
+  Week = "WEEK",
+  Day = "DAY",
+  Hour = "HOUR",
+  ThirtyMinutes = "THIRTY_MINUTES",
+  TenMinutes = "TEN_MINUTES",
+  FiveMinutes = "FIVE_MINUTES",
+  TwoMinutes = "TWO_MINUTES",
+  Minute = "MINUTE"
+}
