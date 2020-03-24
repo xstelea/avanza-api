@@ -94,3 +94,8 @@ export enum ChartResolution {
   TwoMinutes = "TWO_MINUTES",
   Minute = "MINUTE"
 }
+
+export enum ChartType {
+  Area = "AREA",
+  Candlestick = "CANDLESTICK"
+}
