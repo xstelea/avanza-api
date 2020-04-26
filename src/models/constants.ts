@@ -41,6 +41,7 @@ export enum InstrumentType {
 
 export enum ChartDataPeriod {
   TODAY = 'today',
+  MONTH = 'month',
   ONE_MONTH = 'one_month',
   THREE_MONTHS = 'three_months',
   ONE_WEEK = 'one_week',
